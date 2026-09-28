@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>GS Minimal Test</title>
+    <style>
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+    </style>
+</head>
+
+<body>
+
+    <script type="module">
+        import * as GaussianSplats3D from
+            'https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.5/build/gaussian-splats-3d.module.js';
+
+        const viewer = new GaussianSplats3D.Viewer({
+            sharedMemoryForWorkers: false
+        });
+
+        viewer.addSplatScene(
+            './data/splats/all.splat',
+            {
+                splatAlphaRemovalThreshold: 1,
+                showLoadingUI: true
+            }
+        )
+            .then(() => {
+                console.log('TEST SUCCESS');
+                viewer.start();
+            })
+            .catch((error) => {
+                console.error('TEST FAILED:', error);
+            });
+    </script>
+
+</body>
+</html>
