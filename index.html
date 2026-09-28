@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GeoWeb 3D — GS Viewer</title>
+
+    <link rel="stylesheet" href="css/style.css" />
+
+    <!-- Scoped styles for the overlay/side-by-side feature only — kept
+         separate from css/style.css so nothing existing is touched. -->
+    <style>
+        /* Overlay (default): both viewports full-size and stacked, seg on
+           top with pointer-events disabled so all mouse input reaches the
+           env viewport underneath (env's camera drives both, always). */
+        #gs-root-env, #gs-root-seg {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        #gs-root-seg {
+            pointer-events: none;
+        }
+
+        /* Side by side: env takes the left half, seg the right half —
+           same shared camera, so they always move together. */
+        #viewer-container.mode-split #gs-root-env,
+        #viewer-container.mode-split #gs-root-seg {
+            width: 50%;
+        }
+
+        #viewer-container.mode-split #gs-root-seg {
+            left: 50%;
+            border-left: 1px solid rgba(255, 255, 255, 0.15);
+            /* Unlike overlay mode, there's nothing underneath the seg half
+               to fall through to here — so it needs to actually receive
+               pointer events itself. viewer.js forwards them onto env's
+               canvas so its controls still drive both sides. */
+            pointer-events: auto;
+        }
+
+        .mode-toggle-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 6px 8px;
+            font-size: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: transparent;
+            color: inherit;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+            .mode-btn.active {
+                background: rgba(255, 255, 255, 0.18);
+                font-weight: 600;
+            }
+
+        .blend-row {
+            margin: 4px 0 14px;
+        }
+
+            .blend-row .blend-labels {
+                display: flex;
+                justify-content: space-between;
+                font-size: 11px;
+                opacity: 0.75;
+                margin-bottom: 4px;
+            }
+
+        .level-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 6px 0;
+        }
+
+            .level-row .level-axis {
+                width: 14px;
+                font-size: 11px;
+                opacity: 0.75;
+            }
+
+            .level-row .slider {
+                flex: 1;
+            }
+
+            .level-row .level-val {
+                width: 46px;
+                text-align: right;
+                font-size: 11px;
+                opacity: 0.85;
+            }
+
+        .level-hint {
+            font-size: 11px;
+            opacity: 0.6;
+            margin: 2px 0 8px;
+        }
+
+        .level-reset-btn {
+            width: 100%;
+            margin-top: 4px;
+            padding: 5px 8px;
+            font-size: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: transparent;
+            color: inherit;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <header id="topbar">
+        <div class="topbar-left">
+            <div class="logo-mark">GS</div>
+            <div class="topbar-title">
+                <span class="title-main">GS Viewer</span>
+                <span class="title-sub">Gaussian Splatting · 2 Layer Mode</span>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <div id="coord-display" class="coord-pill">
+                <span class="coord-label">LAT</span><span id="lat-val">52.0024</span>
+                <span class="coord-sep">·</span>
+                <span class="coord-label">LON</span><span id="lon-val">4.3690</span>
+                <span class="coord-sep">·</span>
+                <span class="coord-label">ALT</span><span id="alt-val">0.0</span><span class="coord-unit">m</span>
+            </div>
+            <div id="status-pill" class="status-pill loading">
+                <span class="status-dot"></span>
+                <span id="status-text">Initializing…</span>
+            </div>
+        </div>
+    </header>
+
+    <div id="viewer-container">
+        <div id="cesium-container" style="display:none;"></div>
+        <canvas id="three-canvas" style="display:none;"></canvas>
+
+        <!-- Two independent GS viewers, each with its own real material
+             opacity (that's what makes the Plain/Colored slider a true
+             smooth fade instead of a hard switch). viewer.js copies the
+             env camera onto the seg camera every frame, so whether
+             they're stacked (overlay) or side by side, they always move
+             together. -->
+        <div id="gs-root-env"></div>
+        <div id="gs-root-seg"></div>
+
+        <div id="loading-overlay">
+            <div class="loader-box">
+                <div class="loader-spinner"></div>
+                <div class="loader-label">Loading Gaussian Splats…</div>
+                <div class="loader-progress-track">
+                    <div id="loader-bar" class="loader-progress-bar"></div>
+                </div>
+                <div id="loader-pct" class="loader-pct">0%</div>
+            </div>
+        </div>
+
+        <div id="crosshair" style="display:none;">
+            <div class="ch-h"></div>
+            <div class="ch-v"></div>
+        </div>
+
+        <div id="hover-tooltip" class="hidden">
+            <div class="tooltip-class-dot" id="tooltip-dot"></div>
+            <div class="tooltip-content">
+                <div class="tooltip-class" id="tooltip-class">—</div>
+                <div class="tooltip-meta" id="tooltip-meta">—</div>
+            </div>
+        </div>
+    </div>
+
+    <aside id="side-panel">
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">⬡</span> GS Layers
+            </div>
+
+            <div class="mode-toggle-row">
+                <button type="button" class="mode-btn active" id="mode-overlay">Overlay</button>
+                <button type="button" class="mode-btn" id="mode-split-btn">Side by side</button>
+            </div>
+
+            <div class="blend-row">
+                <div class="blend-labels"><span>Plain</span><span>Colored</span></div>
+                <input type="range" id="blend-slider" min="0" max="100" value="70" class="slider" />
+            </div>
+
+            <div class="layer-row">
+                <div class="layer-info">
+                    <div class="layer-dot env"></div>
+                    <div>
+                        <div class="layer-name">GS Environment</div>
+                        <div class="layer-hint" id="env-hint">No file loaded</div>
+                    </div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-env" checked />
+                    <span class="toggle-track"></span>
+                </label>
+            </div>
+            <div class="opacity-row">
+                <span class="op-label">Opacity</span>
+                <input type="range" id="opacity-env" min="0" max="100" value="100" class="slider" />
+                <span class="op-val" id="opval-env">100%</span>
+            </div>
+
+            <div class="layer-row">
+                <div class="layer-info">
+                    <div class="layer-dot seg"></div>
+                    <div>
+                        <div class="layer-name">Segmentation</div>
+                        <div class="layer-hint" id="seg-hint">No file loaded</div>
+                    </div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-seg" checked />
+                    <span class="toggle-track"></span>
+                </label>
+            </div>
+            <div class="opacity-row">
+                <span class="op-label">Opacity</span>
+                <input type="range" id="opacity-seg" min="0" max="100" value="70" class="slider" />
+                <span class="op-val" id="opval-seg">70%</span>
+            </div>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">▦</span> Environment
+            </div>
+            <div class="seg-area-grid">
+                <button class="seg-area-btn" id="btn-env-polos" onclick="loadEnvPreset()">Reload Environment</button>
+            </div>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">⟲</span> Align / Level
+            </div>
+            <div class="level-hint">Drag until the room sits level and you can fly straight through it. Env + segmentation rotate together.</div>
+
+            <div class="level-row">
+                <span class="level-axis">X</span>
+                <input type="range" id="level-x" class="slider" min="-180" max="180" step="0.5" value="0" />
+                <span class="level-val" id="level-x-val">0.0°</span>
+            </div>
+            <div class="level-row">
+                <span class="level-axis">Y</span>
+                <input type="range" id="level-y" class="slider" min="-180" max="180" step="0.5" value="0" />
+                <span class="level-val" id="level-y-val">0.0°</span>
+            </div>
+            <div class="level-row">
+                <span class="level-axis">Z</span>
+                <input type="range" id="level-z" class="slider" min="-180" max="180" step="0.5" value="0" />
+                <span class="level-val" id="level-z-val">0.0°</span>
+            </div>
+            <button type="button" class="level-reset-btn" id="level-reset">Reset</button>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">◈</span> Segmentation Classes
+            </div>
+            <div id="legend-list" class="legend-list">
+                <div class="legend-empty">Load segmentation data to see classes</div>
+            </div>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">◎</span> Navigation
+            </div>
+            <div class="keybind-grid">
+                <div class="keybind"><kbd>Left drag</kbd><span>Orbit / Look</span></div>
+                <div class="keybind"><kbd>Wheel</kbd><span>Zoom (dolly)</span></div>
+                <div class="keybind"><kbd>Right drag</kbd><span>Pan — moves target</span></div>
+            </div>
+            <div class="level-hint">Scroll only dollies toward the current target — it won't automatically carry you "inside". Right-click + drag to pan the camera and target together into the room.</div>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
+                <span class="section-icon">▣</span> Segmentation Areas
+            </div>
+
+            <div class="seg-area-grid">
+                <button class="seg-area-btn" onclick="clearSegSplat()">None</button>
+                <button class="seg-area-btn" id="btn-area1" onclick="loadSegPreset('area1')">Area 1</button>
+                <button class="seg-area-btn" id="btn-area2" onclick="loadSegPreset('area2')">Area 2</button>
+                <button class="seg-area-btn" id="btn-area3" onclick="loadSegPreset('area3')">Area 3</button>
+                <button class="seg-area-btn" id="btn-area4" onclick="loadSegPreset('area4')">Area 4</button>
+                <button class="seg-area-btn" id="allarea" onclick="loadSegPreset('allarea')">All Area</button>
+            </div>
+        </section>
+
+    </aside>
+
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+          }
+        }
+    </script>
+
+    <script type="module" src="js/viewer.js"></script>
+    <script type="module" src="js/segmentation.js"></script>
+    <script type="module" src="js/ui.js"></script>
+
+</body>
+</html>
