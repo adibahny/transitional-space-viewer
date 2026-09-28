@@ -240,6 +240,21 @@
 
         <section class="panel-section">
             <div class="section-header">
+                <span class="section-icon">▣</span> Segmentation Areas
+            </div>
+
+            <div class="seg-area-grid">
+                <button class="seg-area-btn" onclick="clearSegSplat()">None</button>
+                <button class="seg-area-btn" id="btn-area1" onclick="loadSegPreset('area1')">Area 1</button>
+                <button class="seg-area-btn" id="btn-area2" onclick="loadSegPreset('area2')">Area 2</button>
+                <button class="seg-area-btn" id="btn-area3" onclick="loadSegPreset('area3')">Area 3</button>
+                <button class="seg-area-btn" id="btn-area4" onclick="loadSegPreset('area4')">Area 4</button>
+                <button class="seg-area-btn" id="allarea" onclick="loadSegPreset('allarea')">All Area</button>
+            </div>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-header">
                 <span class="section-icon">▦</span> Environment
             </div>
             <div class="seg-area-grid">
@@ -290,21 +305,6 @@
                 <div class="keybind"><kbd>Right drag</kbd><span>Pan — moves target</span></div>
             </div>
             <div class="level-hint">Scroll only dollies toward the current target — it won't automatically carry you "inside". Right-click + drag to pan the camera and target together into the room.</div>
-        </section>
-
-        <section class="panel-section">
-            <div class="section-header">
-                <span class="section-icon">▣</span> Segmentation Areas
-            </div>
-
-            <div class="seg-area-grid">
-                <button class="seg-area-btn" onclick="clearSegSplat()">None</button>
-                <button class="seg-area-btn" id="btn-area1" onclick="loadSegPreset('area1')">Area 1</button>
-                <button class="seg-area-btn" id="btn-area2" onclick="loadSegPreset('area2')">Area 2</button>
-                <button class="seg-area-btn" id="btn-area3" onclick="loadSegPreset('area3')">Area 3</button>
-                <button class="seg-area-btn" id="btn-area4" onclick="loadSegPreset('area4')">Area 4</button>
-                <button class="seg-area-btn" id="allarea" onclick="loadSegPreset('allarea')">All Area</button>
-            </div>
         </section>
 
     </aside>
