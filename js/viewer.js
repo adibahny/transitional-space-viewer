@@ -557,12 +557,26 @@ async function doLoadEnvSplat(source) {
             await withTimeout(envViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
         }
 
-        await envViewer.addSplatScene(source, {
-            splatAlphaRemovalThreshold: 1,
-            showLoadingUI: false,
-            progressiveLoad: true,
-            onProgress: (pct) => showLoader(true, Math.round((pct || 0) * 100)),
-        });
+        const response = await fetch(source, { cache: 'no-store' });
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${source}: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        try {
+            await envViewer.addSplatScene(blobUrl, {
+                format: GS.SceneFormat.Splat,
+                splatAlphaRemovalThreshold: 1,
+                showLoadingUI: false,
+                onProgress: (pct) =>
+                    showLoader(true, Math.round((pct || 0) * 100)),
+            });
+        } finally {
+            URL.revokeObjectURL(blobUrl);
+        }
 
         // Environment is the canonical geometry — always recompute the
         // shared pivot from it so env + seg rotate about the same point.
