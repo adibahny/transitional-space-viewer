@@ -560,6 +560,7 @@ async function doLoadEnvSplat(source) {
         await envViewer.addSplatScene(source, {
             splatAlphaRemovalThreshold: 1,
             showLoadingUI: false,
+            progressiveLoad: true,
             onProgress: (pct) => showLoader(true, Math.round((pct || 0) * 100)),
         });
 
