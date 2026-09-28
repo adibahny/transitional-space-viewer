@@ -491,7 +491,7 @@ function setActiveAreaButton(areaKey) {
 //      build a fresh one. A normal load of even the biggest file here
 //      finishes in a few seconds, so a short timeout still gives real
 //      loads plenty of room while recovering from a stall quickly.
-const SPLAT_LOAD_TIMEOUT_MS = 8000;
+const SPLAT_LOAD_TIMEOUT_MS = 60000;
 
 function withTimeout(promise, ms, label) {
     let timer;
