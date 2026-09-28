@@ -704,11 +704,26 @@ async function doLoadSegSplat(source, label) {
             await withTimeout(segViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
         }
 
-        await withTimeout(segViewer.addSplatScene(source, {
-            splatAlphaRemovalThreshold: 1,
-            showLoadingUI: false,
-            onProgress: (pct) => showLoader(true, Math.round((pct || 0) * 100)),
-        }), SPLAT_LOAD_TIMEOUT_MS, 'addSplatScene');
+        const response = await fetch(source, { cache: 'no-store' });
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch ${source}: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        try {
+            await segViewer.addSplatScene(blobUrl, {
+                format: GS.SceneFormat.Splat,
+                splatAlphaRemovalThreshold: 1,
+                showLoadingUI: false,
+                onProgress: (pct) =>
+                    showLoader(true, Math.round((pct || 0) * 100)),
+            });
+        } finally {
+            URL.revokeObjectURL(blobUrl);
+        }
 
         // Only fall back to the segmentation's own centroid if no
         // environment has established the shared pivot yet.
