@@ -557,11 +557,11 @@ async function doLoadEnvSplat(source) {
             await withTimeout(envViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
         }
 
-        await withTimeout(envViewer.addSplatScene(source, {
+        await envViewer.addSplatScene(source, {
             splatAlphaRemovalThreshold: 1,
             showLoadingUI: false,
             onProgress: (pct) => showLoader(true, Math.round((pct || 0) * 100)),
-        }), SPLAT_LOAD_TIMEOUT_MS, 'addSplatScene');
+        });
 
         // Environment is the canonical geometry — always recompute the
         // shared pivot from it so env + seg rotate about the same point.
