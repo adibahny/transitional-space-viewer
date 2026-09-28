@@ -53,6 +53,22 @@ export const GEO_ORIGIN = { lat: 52.0024, lon: 4.3690, alt: 5.0 };
 
 let GS = null;
 
+// Mobile browsers have much tighter RAM/GPU budgets than desktop browsers.
+// The viewer uses two independent GS renderers (environment + segmentation),
+// so phones need a few conservative settings to avoid the tab being killed
+// by the OS while the second scene is being built.
+const IS_MOBILE = (() => {
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+        return navigator.userAgentData.mobile;
+    }
+    const ua = navigator.userAgent || '';
+    const isiPadDesktopUA = /Macintosh/i.test(ua) && navigator.maxTouchPoints > 1;
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || isiPadDesktopUA;
+})();
+
+const MOBILE_AUTO_SEG_GUARD = 'gs-mobile-auto-seg-loading';
+const MOBILE_SPLAT_ALPHA_THRESHOLD = 5;
+
 // ====== CHANGE THESE PATHS TO YOUR REAL FILES ======
 // The "polos" / plain environment splat — click-to-load, no upload needed.
 const ENV_PRESET_PATH = 'data/splats/all.splat';
@@ -140,9 +156,35 @@ export async function initViewer() {
     // Auto-load both layers on startup. The plain environment loads first
     // so it establishes the shared pivot/camera context; then the complete
     // segmentation layer (All Area) is loaded on top automatically.
+    //
+    // On mobile, give the browser a short idle window between the two large
+    // scenes so the temporary Blob used for the environment can become
+    // collectible before the segmentation Blob is allocated. A session guard
+    // also prevents an OS-triggered tab reload from entering an endless
+    // auto-load -> memory kill -> reload loop: after such a recovery reload,
+    // the environment stays available and the user can tap All Area manually.
     if (ok) {
         await loadEnvPreset();
-        await loadSegPreset('allarea');
+
+        if (IS_MOBILE) {
+            const recoveringFromAutoSegReload = sessionStorage.getItem(MOBILE_AUTO_SEG_GUARD) === '1';
+
+            if (recoveringFromAutoSegReload) {
+                sessionStorage.removeItem(MOBILE_AUTO_SEG_GUARD);
+                setActiveAreaButton(null);
+                const segHint = document.getElementById('seg-hint');
+                if (segHint) segHint.textContent = 'Mobile safe mode — tap All Area to load';
+                showLoader(false);
+                setStatus('Environment loaded — mobile safe mode', 'ready');
+            } else {
+                sessionStorage.setItem(MOBILE_AUTO_SEG_GUARD, '1');
+                await new Promise((resolve) => setTimeout(resolve, 800));
+                await loadSegPreset('allarea');
+                sessionStorage.removeItem(MOBILE_AUTO_SEG_GUARD);
+            }
+        } else {
+            await loadSegPreset('allarea');
+        }
     } else {
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.classList.add('hidden');
@@ -175,9 +217,10 @@ async function ensureEnvViewer() {
         initialCameraPosition: [13.387, -1.297, -38.206],
         initialCameraLookAt: [4.055, -1.763, -37.824],
         cameraUp: [0, -1, -0.6],
-        ignoreDevicePixelRatio: false,
+        ignoreDevicePixelRatio: IS_MOBILE,
         gpuAcceleratedSort: false,
         sharedMemoryForWorkers: false,
+        freeIntermediateSplatData: IS_MOBILE,
         // true = position/rotation can be changed live (needed for the
         // level/align sliders below to update in real time).
         dynamicScene: true,
@@ -217,9 +260,10 @@ async function ensureSegViewer() {
         initialCameraPosition: [13.387, -1.297, -38.206],
         initialCameraLookAt: [4.055, -1.763, -37.824],
         cameraUp: [0, -1, -0.6],
-        ignoreDevicePixelRatio: false,
+        ignoreDevicePixelRatio: IS_MOBILE,
         gpuAcceleratedSort: false,
         sharedMemoryForWorkers: false,
+        freeIntermediateSplatData: IS_MOBILE,
         dynamicScene: true,
         selfDrivenMode: false,
     });
@@ -494,19 +538,25 @@ async function addSplatFromSource(viewer, source) {
         throw new Error(`Failed to fetch ${source}: ${response.status}`);
     }
 
-    const blob = await response.blob();
-    const blobUrl = URL.createObjectURL(blob);
+    let blob = await response.blob();
+    let blobUrl = URL.createObjectURL(blob);
 
     try {
         await viewer.addSplatScene(blobUrl, {
             format: GS.SceneFormat.Splat,
-            splatAlphaRemovalThreshold: 1,
+            // A slightly higher alpha cutoff on phones removes very faint
+            // splats that cost memory/GPU work but contribute little visually.
+            splatAlphaRemovalThreshold: IS_MOBILE ? MOBILE_SPLAT_ALPHA_THRESHOLD : 1,
             showLoadingUI: false,
             onProgress: (pct) =>
                 showLoader(true, Math.round((pct || 0) * 100)),
         });
     } finally {
         URL.revokeObjectURL(blobUrl);
+        // Drop our strong references immediately so the large temporary Blob
+        // is eligible for garbage collection before the next layer loads.
+        blobUrl = null;
+        blob = null;
     }
 }
 
