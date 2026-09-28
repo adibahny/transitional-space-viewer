@@ -29,7 +29,7 @@
  *
  * Features:
  *   - 1 environment layer + 1 active segmentation layer at a time
- *   - switch between 6 segmentation areas
+ *   - switch between 5 segmentation presets
  *   - Overlay mode: true smooth cross-fade (env + seg stacked, same camera)
  *   - Side-by-side mode: two viewports, same camera, so rotating/zooming
  *     one moves the other identically — dragging/scrolling on EITHER half
@@ -137,11 +137,12 @@ export async function initViewer() {
 
     updateCoordsDummy();
 
-    // Auto-load the environment splat on startup — no click required.
-    // The loading overlay is hidden by loadEnvPreset()/loadEnvSplat() once
-    // this finishes (or immediately, if the GS library failed to load).
+    // Auto-load both layers on startup. The plain environment loads first
+    // so it establishes the shared pivot/camera context; then the complete
+    // segmentation layer (All Area) is loaded on top automatically.
     if (ok) {
         await loadEnvPreset();
+        await loadSegPreset('allarea');
     } else {
         const overlay = document.getElementById('loading-overlay');
         if (overlay) overlay.classList.add('hidden');
@@ -343,13 +344,18 @@ function copyCameraTransform(fromCam, toCam) {
 // shader does internally — so that's what these two functions use.
 function applyEnvVisualState() {
     const root = document.getElementById('gs-root-env');
-    if (root) root.style.opacity = envVisibleState ? String(envOpacityState) : '0';
+    // Opacity blending is an Overlay-only feature. In Side-by-side mode
+    // each viewport is shown at full opacity, while the saved overlay
+    // opacity value is preserved and restored when returning to Overlay.
+    const effectiveOpacity = viewMode === 'sidebyside' ? 1 : envOpacityState;
+    if (root) root.style.opacity = envVisibleState ? String(effectiveOpacity) : '0';
     if (envViewer?.splatMesh) envViewer.splatMesh.visible = envVisibleState;
 }
 
 function applySegVisualState() {
     const root = document.getElementById('gs-root-seg');
-    if (root) root.style.opacity = segVisibleState ? String(segOpacityState) : '0';
+    const effectiveOpacity = viewMode === 'sidebyside' ? 1 : segOpacityState;
+    if (root) root.style.opacity = segVisibleState ? String(effectiveOpacity) : '0';
     if (segViewer?.splatMesh) segViewer.splatMesh.visible = segVisibleState;
 }
 
@@ -427,6 +433,11 @@ export function setViewMode(mode) {
 
     const container = document.getElementById('viewer-container');
     if (container) container.classList.toggle('mode-split', viewMode === 'sidebyside');
+
+    // Re-apply visual state immediately so Side-by-side is always 100%
+    // opacity and Overlay restores the user's previously selected values.
+    applyEnvVisualState();
+    applySegVisualState();
 }
 
 export function getViewMode() {
@@ -471,43 +482,38 @@ function setActiveAreaButton(areaKey) {
     document.getElementById(`btn-${areaKey}`)?.classList.add('active');
 }
 
-// ─── Load safety net shared by env + seg ──────────────────────────────
-// Two separate failure modes showed up under real use (switching
-// segmentation areas):
-//   1. Calling addSplatScene/removeSplatScene again before the previous
-//      call had settled makes the GS library throw "Cannot add splat
-//      scene while another load or unload is already in progress." —
-//      fixed by the queues below, which never let two calls overlap.
-//   2. Even one at a time, this library version occasionally leaves its
-//      OWN internal "is this viewer busy" flag (isLoadingOrUnloading())
-//      stuck true after a removeSplatScene/addSplatScene cycle — not
-//      only when clicking fast, it's shown up on a single ordinary
-//      click too. Once stuck, every future add/removeSplatScene call on
-//      that same viewer instance either throws or just hangs with no
-//      error and no network request, which looks exactly like "loading
-//      forever, nothing happens". There's no known way to un-stick that
-//      flag from the outside, so the fix is to notice it (or time out
-//      waiting for it) and throw the whole viewer instance away and
-//      build a fresh one. A normal load of even the biggest file here
-//      finishes in a few seconds, so a short timeout still gives real
-//      loads plenty of room while recovering from a stall quickly.
-const SPLAT_LOAD_TIMEOUT_MS = 60000;
+// ─── GitHub Pages-safe splat loading ─────────────────────────────────
+// GitHub Pages can serve the .splat files through CDN responses whose
+// metadata does not match what this GS library expects when it fetches
+// the URL directly. Fetch the complete file ourselves first, then give
+// the library a browser Blob URL with an explicit SPLAT format.
+async function addSplatFromSource(viewer, source) {
+    const response = await fetch(source, { cache: 'no-store' });
 
-function withTimeout(promise, ms, label) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} is taking too long (>${Math.round(ms / 1000)}s) — rebuilding the viewer`)), ms);
-    });
-    return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+    if (!response.ok) {
+        throw new Error(`Failed to fetch ${source}: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+
+    try {
+        await viewer.addSplatScene(blobUrl, {
+            format: GS.SceneFormat.Splat,
+            splatAlphaRemovalThreshold: 1,
+            showLoadingUI: false,
+            onProgress: (pct) =>
+                showLoader(true, Math.round((pct || 0) * 100)),
+        });
+    } finally {
+        URL.revokeObjectURL(blobUrl);
+    }
 }
 
 // ─── Environment layer ───────────────────────────────────────────────
-// Loading is serialized through a tiny queue: the GS library throws
-// "Cannot add splat scene while another load or unload is already in
-// progress" if you call addSplatScene/removeSplatScene while a previous
-// one hasn't settled yet. That's harmless for env (only one button), but
-// the identical pattern below matters a lot for segmentation, so both
-// go through the same busy/pending shape for consistency.
+// Environment requests are serialized so repeated reload clicks cannot
+// overlap. A reload rebuilds the environment viewer rather than trying
+// to remove a scene from an already-used GS viewer instance.
 let envLoadBusy = false;
 let pendingEnvSource = undefined; // undefined = nothing queued
 
@@ -516,12 +522,15 @@ export async function loadEnvSplat(source) {
     if (envLoadBusy) return;
 
     envLoadBusy = true;
-    while (pendingEnvSource !== undefined) {
-        const src = pendingEnvSource;
-        pendingEnvSource = undefined;
-        await doLoadEnvSplat(src);
+    try {
+        while (pendingEnvSource !== undefined) {
+            const src = pendingEnvSource;
+            pendingEnvSource = undefined;
+            await doLoadEnvSplat(src);
+        }
+    } finally {
+        envLoadBusy = false;
     }
-    envLoadBusy = false;
 }
 
 async function disposeEnvViewer() {
@@ -531,7 +540,6 @@ async function disposeEnvViewer() {
     envViewer = null;
     gsViewer = null;
     window._envViewer = null;
-    renderLoopStarted = false; // startRenderLoop() will re-arm on the fresh viewer
     clearRoot('gs-root-env');
 }
 
@@ -544,39 +552,16 @@ async function doLoadEnvSplat(source) {
     try {
         await ensureEnvViewer();
 
-        // See the comment above SPLAT_LOAD_TIMEOUT_MS — a wedged viewer
-        // shows up as isLoadingOrUnloading() staying true even though
-        // nothing of ours is in flight.
-        if (envViewer.isLoadingOrUnloading()) {
-            console.warn('[GS] env viewer looked stuck — rebuilding it');
+        // For an explicit environment reload, rebuild the GS viewer instead
+        // of removeSplatScene(). This avoids the library's internal
+        // load/unload state getting wedged, while the single render loop
+        // continues to use the fresh envViewer instance automatically.
+        if (envViewer.splatMesh && envViewer.splatMesh.getSceneCount() > 0) {
             await disposeEnvViewer();
             await ensureEnvViewer();
         }
 
-        if (envViewer.splatMesh && envViewer.splatMesh.getSceneCount() > 0) {
-            await withTimeout(envViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
-        }
-
-        const response = await fetch(source, { cache: 'no-store' });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch ${source}: ${response.status}`);
-        }
-
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-
-        try {
-            await envViewer.addSplatScene(blobUrl, {
-                format: GS.SceneFormat.Splat,
-                splatAlphaRemovalThreshold: 1,
-                showLoadingUI: false,
-                onProgress: (pct) =>
-                    showLoader(true, Math.round((pct || 0) * 100)),
-            });
-        } finally {
-            URL.revokeObjectURL(blobUrl);
-        }
+        await addSplatFromSource(envViewer, source);
 
         // Environment is the canonical geometry — always recompute the
         // shared pivot from it so env + seg rotate about the same point.
@@ -607,37 +592,30 @@ export async function loadEnvPreset() {
 }
 
 // ─── Segmentation layer ──────────────────────────────────────────────
-// Same serialization as env above, but this is the one that actually
-// gets hit in practice: clicking through Area 1 → 2 → 3 → 4 → All Area
-// quickly (totally normal while exploring) used to fire addSplatScene
-// again before the previous one had finished, which the library rejects
-// outright — so most of those clicks silently failed with a "Seg error"
-// in the status pill (easy to miss) and the view just sat on whichever
-// area happened to win the race, looking stuck/never loading.
-//
-// Fix: a click no longer starts a load directly. It just records "this
-// is what should be showing now" (pendingSegAction) and asks the queue
-// to run. Only one load/clear is ever in flight; if more clicks land
-// while it's busy, they simply overwrite pendingSegAction, so once the
-// current one finishes the queue jumps straight to the LAST thing you
-// clicked — skipping the areas you clicked past on the way — instead of
-// erroring out or dutifully loading every intermediate one.
+// Area changes are serialized: only one segmentation load/clear can be
+// in flight. Extra clicks simply replace pendingSegAction, so after the
+// current operation finishes we jump straight to the LAST requested
+// preset instead of trying to load every intermediate click. Each actual
+// preset load uses a fresh segViewer instance (see doLoadSegSplat).
 let segLoadBusy = false;
 let pendingSegAction = null; // { type: 'load', source, label } | { type: 'clear' }
 
 async function runSegQueue() {
     if (segLoadBusy) return;
     segLoadBusy = true;
-    while (pendingSegAction) {
-        const action = pendingSegAction;
-        pendingSegAction = null;
-        if (action.type === 'clear') {
-            await doClearSegSplat();
-        } else {
-            await doLoadSegSplat(action.source, action.label);
+    try {
+        while (pendingSegAction) {
+            const action = pendingSegAction;
+            pendingSegAction = null;
+            if (action.type === 'clear') {
+                await doClearSegSplat();
+            } else {
+                await doLoadSegSplat(action.source, action.label);
+            }
         }
+    } finally {
+        segLoadBusy = false;
     }
-    segLoadBusy = false;
 }
 
 export async function clearSegSplat() {
@@ -656,14 +634,10 @@ async function disposeSegViewer() {
 }
 
 async function doClearSegSplat() {
-    try {
-        if (segViewer?.splatMesh && segViewer.splatMesh.getSceneCount() > 0) {
-            await withTimeout(segViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
-        }
-    } catch (e) {
-        console.warn('[GS] clearSegSplat warning — rebuilding seg viewer:', e);
-        await disposeSegViewer();
-    }
+    // A segmentation layer is disposable. Rebuilding it is safer than
+    // removeSplatScene(), which can leave this library in a stuck
+    // load/unload state after repeated area switching.
+    await disposeSegViewer();
     setActiveAreaButton(null);
     document.getElementById('seg-hint').textContent = 'No file loaded';
     setStatus('Segmentation cleared', 'ready');
@@ -681,49 +655,15 @@ async function doLoadSegSplat(source, label) {
     showLoader(true, 0);
 
     try {
+        // Each segmentation preset gets a fresh viewer instance. This
+        // deliberately avoids removeSplatScene() and the library's stuck
+        // busy-state / late-cleanup race. The camera is copied from the
+        // environment every frame, so rebuilding segmentation does NOT
+        // reset the user's viewpoint.
+        await disposeSegViewer();
         await ensureSegViewer();
 
-        // See the comment above SPLAT_LOAD_TIMEOUT_MS. This is the one
-        // that actually bit in practice: after a couple of very quick
-        // clicks through the area buttons, the seg viewer's own internal
-        // busy flag got stuck true and every click after that just sat
-        // on "Loading segmentation…" forever with no error and no
-        // network request — because the call never even reached the
-        // library code that fetches the file. Detecting that and
-        // rebuilding the viewer is what actually recovers from it.
-        if (segViewer.isLoadingOrUnloading()) {
-            console.warn('[GS] seg viewer looked stuck — rebuilding it');
-            await disposeSegViewer();
-            await ensureSegViewer();
-        }
-
-        // The env viewer's camera and the shared pivot are completely
-        // untouched by this — only the seg viewer's own scene changes,
-        // so switching areas never resets your view.
-        if (segViewer.splatMesh && segViewer.splatMesh.getSceneCount() > 0) {
-            await withTimeout(segViewer.removeSplatScene(0, false), SPLAT_LOAD_TIMEOUT_MS, 'removeSplatScene');
-        }
-
-        const response = await fetch(source, { cache: 'no-store' });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch ${source}: ${response.status}`);
-        }
-
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-
-        try {
-            await segViewer.addSplatScene(blobUrl, {
-                format: GS.SceneFormat.Splat,
-                splatAlphaRemovalThreshold: 1,
-                showLoadingUI: false,
-                onProgress: (pct) =>
-                    showLoader(true, Math.round((pct || 0) * 100)),
-            });
-        } finally {
-            URL.revokeObjectURL(blobUrl);
-        }
+        await addSplatFromSource(segViewer, source);
 
         // Only fall back to the segmentation's own centroid if no
         // environment has established the shared pivot yet.

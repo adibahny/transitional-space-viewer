@@ -68,20 +68,57 @@ if (blendSlider) {
 const modeOverlayBtn = document.getElementById('mode-overlay');
 const modeSplitBtn = document.getElementById('mode-split-btn');
 
+const envOpacitySlider = document.getElementById('opacity-env');
+const segOpacitySlider = document.getElementById('opacity-seg');
+const blendControlSlider = document.getElementById('blend-slider');
+const overlayOnlyControls = [
+  document.getElementById('blend-controls'),
+  document.getElementById('opacity-env-row'),
+  document.getElementById('opacity-seg-row'),
+].filter(Boolean);
+
 function setActiveModeButton(mode) {
   modeOverlayBtn?.classList.toggle('active', mode === 'overlay');
   modeSplitBtn?.classList.toggle('active', mode === 'sidebyside');
 }
 
+function updateOpacityControlsForMode(mode) {
+  const overlayMode = mode === 'overlay';
+
+  // Opacity controls only belong to Overlay mode. Hide and disable them
+  // in Side-by-side so both viewports are shown at their true 100% opacity.
+  overlayOnlyControls.forEach((el) => {
+    el.classList.toggle('overlay-only-hidden', !overlayMode);
+  });
+
+  [envOpacitySlider, segOpacitySlider, blendControlSlider].forEach((slider) => {
+    if (slider) slider.disabled = !overlayMode;
+  });
+
+  // JSON/point segmentation, if present, follows the same rule as the GS
+  // segmentation layer. Restore the saved slider value on return to Overlay.
+  if (overlayMode) {
+    const segOpacity = Number(segOpacitySlider?.value ?? 100) / 100;
+    setSegPointsOpacity(segOpacity);
+  } else {
+    setSegPointsOpacity(1);
+  }
+}
+
 modeOverlayBtn?.addEventListener('click', () => {
   setViewMode('overlay');
   setActiveModeButton('overlay');
+  updateOpacityControlsForMode('overlay');
 });
 
 modeSplitBtn?.addEventListener('click', () => {
   setViewMode('sidebyside');
   setActiveModeButton('sidebyside');
+  updateOpacityControlsForMode('sidebyside');
 });
+
+// Keep the UI consistent with the default mode on first load.
+updateOpacityControlsForMode('overlay');
 
 // ─── Level / align sliders — rotates env+seg together so the room lines ─────
 // ─── up with the world axes instead of sitting on a diagonal.           ─────

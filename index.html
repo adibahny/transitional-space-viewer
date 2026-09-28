@@ -69,6 +69,12 @@
             margin: 4px 0 14px;
         }
 
+        /* Opacity/blend controls exist only in Overlay mode. ui.js toggles
+           this class when switching to Side-by-side. */
+        .overlay-only-hidden {
+            display: none !important;
+        }
+
             .blend-row .blend-labels {
                 display: flex;
                 justify-content: space-between;
@@ -194,7 +200,7 @@
                 <button type="button" class="mode-btn" id="mode-split-btn">Side by side</button>
             </div>
 
-            <div class="blend-row">
+            <div class="blend-row" id="blend-controls">
                 <div class="blend-labels"><span>Plain</span><span>Colored</span></div>
                 <input type="range" id="blend-slider" min="0" max="100" value="70" class="slider" />
             </div>
@@ -212,7 +218,7 @@
                     <span class="toggle-track"></span>
                 </label>
             </div>
-            <div class="opacity-row">
+            <div class="opacity-row" id="opacity-env-row">
                 <span class="op-label">Opacity</span>
                 <input type="range" id="opacity-env" min="0" max="100" value="100" class="slider" />
                 <span class="op-val" id="opval-env">100%</span>
@@ -231,7 +237,7 @@
                     <span class="toggle-track"></span>
                 </label>
             </div>
-            <div class="opacity-row">
+            <div class="opacity-row" id="opacity-seg-row">
                 <span class="op-label">Opacity</span>
                 <input type="range" id="opacity-seg" min="0" max="100" value="70" class="slider" />
                 <span class="op-val" id="opval-seg">70%</span>
@@ -249,7 +255,7 @@
                 <button class="seg-area-btn" id="btn-area2" onclick="loadSegPreset('area2')">Area 2</button>
                 <button class="seg-area-btn" id="btn-area3" onclick="loadSegPreset('area3')">Area 3</button>
                 <button class="seg-area-btn" id="btn-area4" onclick="loadSegPreset('area4')">Area 4</button>
-                <button class="seg-area-btn" id="allarea" onclick="loadSegPreset('allarea')">All Area</button>
+                <button class="seg-area-btn" id="btn-allarea" onclick="loadSegPreset('allarea')">All Area</button>
             </div>
         </section>
 
